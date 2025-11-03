@@ -1,38 +1,36 @@
 /* ================================================================================
-  Script to create the 'JIRAUSER' login and grant necessary permissions
-  for the automation blog post.
-================================================================================
-*/
--- Variables (edit these)
-DECLARE @LoginName sysname = N'PUT JIRA SQL USER HERE';            -- Desired SQL login/user name
-DECLARE @LoginPassword nvarchar(256) = N'PUT YOUR PASSWORD HERE';  -- Strong password
+  Purpose: Create a SQL login, grant minimal perms, map to msdb user with read access
+  How to use: Set @LoginName and @LoginPassword, then run.
+================================================================================ */
 
--- Work in master for server-level principal (login)
+-- Variables (edit these)
+DECLARE @LoginName       sysname        = N'PUT JIRA SQL USER HERE';
+DECLARE @LoginPassword   nvarchar(256)  = N'PUT YOUR PASSWORD HERE';
+
+-- Helpers for safe dynamic SQL
+DECLARE @LoginQuoted sysname       = QUOTENAME(@LoginName, N']');                 -- [name]
+DECLARE @PwdEscaped nvarchar(512)  = REPLACE(@LoginPassword, N'''', N'''''');     -- escape '
+
+/* Step 1: Create login in master (if missing) */
 USE [master];
 
--- Create the login if it does not exist
 IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = @LoginName)
-    EXEC(
-        N'CREATE LOGIN [' + REPLACE(@LoginName, ']', ']]') + N'] ' +
-        N'WITH PASSWORD = N''' + REPLACE(@LoginPassword, '''', '''''') + N''', ' +
-        N'CHECK_EXPIRATION = OFF, CHECK_POLICY = OFF;'
-    );
+BEGIN
+    EXEC (N'CREATE LOGIN ' + @LoginQuoted +
+          N' WITH PASSWORD = N''' + @PwdEscaped + N''', CHECK_EXPIRATION = OFF, CHECK_POLICY = OFF;');
+END
 
--- Grant minimal server-level visibility (adjust/remove as needed)
-EXEC(N'GRANT VIEW SERVER STATE TO [' + REPLACE(@LoginName, ']', ']]') + N'];');
-EXEC(N'GRANT VIEW ANY DEFINITION TO [' + REPLACE(@LoginName, ']', ']]') + N'];');
+/* Step 2: Grant server-level permissions */
+EXEC (N'GRANT VIEW SERVER STATE TO '   + @LoginQuoted + N';');
+EXEC (N'GRANT VIEW ANY DEFINITION TO ' + @LoginQuoted + N';');  -- remove if not needed
 
--- Switch to msdb for database-level principal (user)
+/* Step 3: Create msdb user mapped to the login (if missing) */
 USE [msdb];
 
--- Create the database user if it does not exist
 IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = @LoginName)
-    EXEC(
-        N'CREATE USER [' + REPLACE(@LoginName, ']', ']]') + N'] ' +
-        N'FOR LOGIN [' + REPLACE(@LoginName, ']', ']]') + N'];'
-    );
+BEGIN
+    EXEC (N'CREATE USER ' + @LoginQuoted + N' FOR LOGIN ' + @LoginQuoted + N';');
+END
 
--- Add the user to db_datareader (read-only access to msdb tables)
-EXEC(
-    N'ALTER ROLE [db_datareader] ADD MEMBER [' + REPLACE(@LoginName, ']', ']]') + N'];'
-);
+/* Step 4: Add to db_datareader in msdb */
+EXEC (N'ALTER ROLE [db_datareader] ADD MEMBER ' + @LoginQuoted + N';');
